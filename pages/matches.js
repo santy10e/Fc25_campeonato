@@ -3,29 +3,51 @@ import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import styles from '../styles/Matches.module.scss';
 
+// Firestore
+import { db } from '../services/firebase';
+import {
+  collection,
+  getDocs,
+  updateDoc,
+  doc
+} from 'firebase/firestore';
+
 export default function MatchesPage() {
   const [matches, setMatches] = useState([]);
+  const matchesColRef = collection(db, 'matches');
 
+  // Cargar partidos al montar
   useEffect(() => {
-    const storedMatches = localStorage.getItem('fifa25-matches');
-    if (storedMatches) {
-      setMatches(JSON.parse(storedMatches));
-    }
+    loadMatches();
   }, []);
 
-  const handleScoreChange = (matchId, homeScore, awayScore) => {
-    const updatedMatches = matches.map((match) => {
-      if (match.id === matchId) {
-        return {
-          ...match,
-          homeScore: homeScore !== '' ? parseInt(homeScore, 10) : null,
-          awayScore: awayScore !== '' ? parseInt(awayScore, 10) : null,
-        };
-      }
-      return match;
-    });
-    setMatches(updatedMatches);
-    localStorage.setItem('fifa25-matches', JSON.stringify(updatedMatches));
+  const loadMatches = async () => {
+    try {
+      const snapshot = await getDocs(matchesColRef);
+      const data = snapshot.docs.map((d) => ({
+        id: d.id,
+        ...d.data(),
+      }));
+      setMatches(data);
+    } catch (err) {
+      console.error('Error al cargar partidos:', err);
+    }
+  };
+
+  // Manejar cambio de marcador
+  const handleScoreChange = async (matchId, homeScore, awayScore) => {
+    try {
+      // Actualizar en Firestore
+      const matchRef = doc(db, 'matches', matchId);
+      await updateDoc(matchRef, {
+        homeScore: homeScore !== '' ? parseInt(homeScore, 10) : null,
+        awayScore: awayScore !== '' ? parseInt(awayScore, 10) : null,
+      });
+      // Recargar la lista de partidos
+      await loadMatches();
+    } catch (err) {
+      console.error('Error al actualizar marcador:', err);
+    }
   };
 
   if (matches.length === 0) {
@@ -48,10 +70,9 @@ export default function MatchesPage() {
 
       <div className={styles.matchGrid}>
         {matches.map((match) => {
-          // Para mostrar si es ida, vuelta o single:
           let matchLabel = 'Partido Único';
-          if (match.id.includes('ida')) matchLabel = 'Ida';
-          if (match.id.includes('vuelta')) matchLabel = 'Vuelta';
+          if (match.mode === 'ida') matchLabel = 'Ida';
+          if (match.mode === 'vuelta') matchLabel = 'Vuelta';
 
           return (
             <div key={match.id} className={styles.card}>
@@ -59,11 +80,11 @@ export default function MatchesPage() {
                 {/* Jugador Local */}
                 <div className={styles.playerInfo}>
                   <img
-                    src={match.homePlayer.imageUrl}
-                    alt={match.homePlayer.name}
+                    src={match.homePlayer?.imageUrl}
+                    alt={match.homePlayer?.name}
                     className={styles.playerImg}
                   />
-                  <p>{match.homePlayer.name}</p>
+                  <p>{match.homePlayer?.name}</p>
                 </div>
 
                 {/* Marcadores */}
@@ -73,7 +94,11 @@ export default function MatchesPage() {
                     className={styles.scoreInput}
                     value={match.homeScore ?? ''}
                     onChange={(e) =>
-                      handleScoreChange(match.id, e.target.value, match.awayScore ?? '')
+                      handleScoreChange(
+                        match.id,
+                        e.target.value,
+                        match.awayScore ?? ''
+                      )
                     }
                   />
                   <span className={styles.vsText}>vs</span>
@@ -82,7 +107,11 @@ export default function MatchesPage() {
                     className={styles.scoreInput}
                     value={match.awayScore ?? ''}
                     onChange={(e) =>
-                      handleScoreChange(match.id, match.homeScore ?? '', e.target.value)
+                      handleScoreChange(
+                        match.id,
+                        match.homeScore ?? '',
+                        e.target.value
+                      )
                     }
                   />
                 </div>
@@ -90,15 +119,14 @@ export default function MatchesPage() {
                 {/* Jugador Visitante */}
                 <div className={styles.playerInfo}>
                   <img
-                    src={match.awayPlayer.imageUrl}
-                    alt={match.awayPlayer.name}
+                    src={match.awayPlayer?.imageUrl}
+                    alt={match.awayPlayer?.name}
                     className={styles.playerImg}
                   />
-                  <p>{match.awayPlayer.name}</p>
+                  <p>{match.awayPlayer?.name}</p>
                 </div>
               </div>
 
-              {/* Etiqueta de Ida/Vuelta o Single */}
               <p className={styles.matchType}>{matchLabel}</p>
             </div>
           );

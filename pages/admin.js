@@ -3,103 +3,165 @@ import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import styles from '../styles/Admin.module.scss';
 
+// Importar Firestore
+import { db } from '../services/firebase';
+import {
+  collection,
+  getDocs,
+  addDoc,
+  deleteDoc,
+  doc
+} from 'firebase/firestore';
+
 export default function AdminPage() {
   const [playerName, setPlayerName] = useState('');
   const [imageUrl, setImageUrl] = useState('');
+  const [imageFile, setImageFile] = useState(null); // Base64 del archivo subido
   const [players, setPlayers] = useState([]);
-  // Nuevo estado para el modo de campeonato
   const [champMode, setChampMode] = useState('single'); // 'single' o 'double'
 
+  // Referencias de colecciones Firestore
+  const playersColRef = collection(db, 'players');
+  const matchesColRef = collection(db, 'matches');
+
+  // Al montar, cargamos los jugadores desde Firestore
   useEffect(() => {
-    const storedPlayers = localStorage.getItem('fifa25-players');
-    if (storedPlayers) {
-      setPlayers(JSON.parse(storedPlayers));
-    }
+    const fetchPlayers = async () => {
+      const snapshot = await getDocs(playersColRef);
+      const data = snapshot.docs.map((doc) => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      setPlayers(data);
+    };
+    fetchPlayers().catch(console.error);
   }, []);
 
-  // Agregar jugador (usando URL en lugar de Base64)
-  const handleAddPlayer = (e) => {
+  // Manejar subida de archivo y convertirlo a Base64
+  const handleFileUpload = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const allowedTypes = ['image/jpeg', 'image/png'];
+    if (!allowedTypes.includes(file.type)) {
+      alert('Formato de imagen no soportado. Usa JPG o PNG.');
+      e.target.value = null;
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      setImageFile(reader.result); // Base64
+    };
+    reader.readAsDataURL(file);
+  };
+
+  // Agregar jugador en Firestore
+  const handleAddPlayer = async (e) => {
     e.preventDefault();
     if (!playerName.trim()) return;
 
-    // Si no proporcionan URL, usamos una imagen por defecto.
+    let finalImage = '/fifa-logo.png';
+    if (imageFile) {
+      finalImage = imageFile;
+    } else if (imageUrl.trim()) {
+      finalImage = imageUrl.trim();
+    }
+
     const newPlayer = {
       name: playerName.trim(),
-      imageUrl: imageUrl.trim() || '/fifa-logo.png',
+      imageUrl: finalImage
     };
 
-    const newPlayers = [...players, newPlayer];
-    localStorage.setItem('fifa25-players', JSON.stringify(newPlayers));
-    setPlayers(newPlayers);
+    try {
+      await addDoc(playersColRef, newPlayer);
+      alert('Jugador agregado a Firebase');
 
-    // Limpiamos campos
-    setPlayerName('');
-    setImageUrl('');
+      // Reset form
+      setPlayerName('');
+      setImageUrl('');
+      setImageFile(null);
+      e.target.reset();
+
+      // Recargar lista de jugadores
+      const snapshot = await getDocs(playersColRef);
+      const data = snapshot.docs.map((doc) => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      setPlayers(data);
+    } catch (err) {
+      console.error('Error al agregar jugador:', err);
+    }
   };
 
-  // Eliminar jugador
-  const handleRemovePlayer = (index) => {
-    const newPlayers = [...players];
-    newPlayers.splice(index, 1);
-    localStorage.setItem('fifa25-players', JSON.stringify(newPlayers));
-    setPlayers(newPlayers);
+  // Eliminar jugador de Firestore
+  const handleRemovePlayer = async (playerIndex) => {
+    // Obtenemos el ID del player en el array local
+    const playerId = players[playerIndex].id;
+    try {
+      await deleteDoc(doc(db, 'players', playerId));
+      alert('Jugador eliminado');
+
+      // Recargar
+      const snapshot = await getDocs(playersColRef);
+      const data = snapshot.docs.map((doc) => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      setPlayers(data);
+    } catch (err) {
+      console.error('Error al eliminar jugador:', err);
+    }
   };
 
-  /**
-   * Generar Round-Robin simple ("Normal"):
-   * Si hay N jugadores, se generan N*(N-1)/2 partidos.
-   */
+  // Generar Round-Robin simple
   const generateSingleRoundRobin = (playersArr) => {
     const matches = [];
     for (let i = 0; i < playersArr.length; i++) {
       for (let j = i + 1; j < playersArr.length; j++) {
         matches.push({
-          id: `${i}-${j}-single`,
           homePlayer: playersArr[i],
           awayPlayer: playersArr[j],
           homeScore: null,
           awayScore: null,
+          mode: 'single'
         });
       }
     }
     return matches;
   };
 
-  /**
-   * Generar Round-Robin ida y vuelta ("Doble"):
-   * Por cada par [i, j], se crean 2 partidos:
-   *   - ida:   home = i, away = j
-   *   - vuelta: home = j, away = i
-   */
+  // Generar Round-Robin ida y vuelta
   const generateDoubleRoundRobin = (playersArr) => {
     const matches = [];
     for (let i = 0; i < playersArr.length; i++) {
       for (let j = i + 1; j < playersArr.length; j++) {
         // Ida
         matches.push({
-          id: `${i}-${j}-ida`,
           homePlayer: playersArr[i],
           awayPlayer: playersArr[j],
           homeScore: null,
           awayScore: null,
+          mode: 'ida'
         });
         // Vuelta
         matches.push({
-          id: `${i}-${j}-vuelta`,
           homePlayer: playersArr[j],
           awayPlayer: playersArr[i],
           homeScore: null,
           awayScore: null,
+          mode: 'vuelta'
         });
       }
     }
     return matches;
   };
 
-  // Generar los partidos según el modo seleccionado (single o double)
-  const handleGenerateMatches = () => {
+  // Generar partidos y guardarlos en Firestore (colección "matches")
+  const handleGenerateMatches = async () => {
     if (players.length < 2) {
-      alert('Se necesitan al menos 2 jugadores para generar partidos.');
+      alert('Se necesitan al menos 2 jugadores.');
       return;
     }
 
@@ -110,19 +172,27 @@ export default function AdminPage() {
       generatedMatches = generateSingleRoundRobin(players);
     }
 
-    localStorage.setItem('fifa25-matches', JSON.stringify(generatedMatches));
-    alert(
-      `Partidos generados en modo: ${
-        champMode === 'double' ? 'Ida y Vuelta' : 'Normal'
-      }`
-    );
+    // Guardar cada partido en "matches" (podrías usar batch si prefieres)
+    try {
+      // Primero borrar los previos (opcional, si quieres limpiar)
+      // const oldSnapshot = await getDocs(matchesColRef);
+      // oldSnapshot.forEach(async (m) => {
+      //   await deleteDoc(doc(db, 'matches', m.id));
+      // });
+
+      for (const match of generatedMatches) {
+        await addDoc(matchesColRef, match);
+      }
+      alert(`Partidos generados en modo: ${champMode === 'double' ? 'Ida y Vuelta' : 'Normal'}`);
+    } catch (err) {
+      console.error('Error generando partidos:', err);
+    }
   };
 
   return (
     <div className={styles.container}>
-      <h1 className={styles.title}>Administración de Jugadores</h1>
+      <h1 className={styles.title}>Administración de Jugadores (Firebase)</h1>
 
-      {/* FORMULARIO PARA AÑADIR JUGADORES (ahora con URL de imagen) */}
       <form onSubmit={handleAddPlayer} className={styles.form}>
         <input
           type="text"
@@ -133,9 +203,14 @@ export default function AdminPage() {
         />
         <input
           type="text"
-          placeholder="URL de la imagen (ej: https://...)"
+          placeholder="URL de la imagen (opcional)"
           value={imageUrl}
           onChange={(e) => setImageUrl(e.target.value)}
+        />
+        <input
+          type="file"
+          accept="image/*"
+          onChange={handleFileUpload}
         />
         <button type="submit" className="btn primary">
           Agregar
@@ -145,15 +220,9 @@ export default function AdminPage() {
       <h2>Lista de Jugadores</h2>
       <div className={styles.playerList}>
         {players.map((player, index) => (
-          <div key={index} className={styles.playerCard}>
-            <img
-              src={player.imageUrl}
-              alt={player.name}
-              className={styles.playerImg}
-            />
-            <p>
-              <strong>{player.name}</strong>
-            </p>
+          <div key={player.id} className={styles.playerCard}>
+            <img src={player.imageUrl} alt={player.name} className={styles.playerImg} />
+            <p><strong>{player.name}</strong></p>
             <button
               onClick={() => handleRemovePlayer(index)}
               className="btn secondary"
@@ -164,7 +233,6 @@ export default function AdminPage() {
         ))}
       </div>
 
-      {/* SELECCIÓN DE MODO DE CAMPEONATO */}
       <div className={styles.modeContainer}>
         <label className={styles.modeLabel}>Modo de Campeonato:</label>
         <select

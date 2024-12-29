@@ -3,59 +3,53 @@ import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import styles from '../styles/Standing.module.scss';
 
+// Firestore
+import { db } from '../services/firebase';
+import { collection, getDocs } from 'firebase/firestore';
+
 export default function StandingsPage() {
   const [players, setPlayers] = useState([]);
   const [matches, setMatches] = useState([]);
   const [standings, setStandings] = useState([]);
 
-  // Cargar inicialmente
+  const playersColRef = collection(db, 'players');
+  const matchesColRef = collection(db, 'matches');
+
+  // Cargar data al montar
   useEffect(() => {
-    loadData();
-  }, []);
+    const loadData = async () => {
+      try {
+        // Jugadores
+        const snapPlayers = await getDocs(playersColRef);
+        const playersData = snapPlayers.docs.map((d) => ({ id: d.id, ...d.data() }));
 
-  // Suscribirse a cambios en localStorage (para tiempo real)
-  useEffect(() => {
-    const handleStorage = (event) => {
-      // Chequeamos si cambiaron la key de matches
-      if (event.key === 'fifa25-matches') {
-        loadData(); // recargar data
-      }
-      // Si quieres también escuchar cambios en 'fifa25-players', se hace algo similar
-    };
+        // Partidos
+        const snapMatches = await getDocs(matchesColRef);
+        const matchesData = snapMatches.docs.map((d) => ({ id: d.id, ...d.data() }));
 
-    window.addEventListener('storage', handleStorage);
-    return () => window.removeEventListener('storage', handleStorage);
-  }, []);
+        setPlayers(playersData);
+        setMatches(matchesData);
 
-  const loadData = () => {
-    const storedPlayers = localStorage.getItem('fifa25-players');
-    const storedMatches = localStorage.getItem('fifa25-matches');
-    if (storedPlayers) {
-      setPlayers(JSON.parse(storedPlayers));
-    }
-    if (storedMatches) {
-      const parsedMatches = JSON.parse(storedMatches);
-      setMatches(parsedMatches);
-      // Recalcular standings
-      if (storedPlayers) {
-        const parsedPlayers = JSON.parse(storedPlayers);
-        const newTable = calculateStandings(parsedPlayers, parsedMatches);
+        // Calcular standings
+        const newTable = calculateStandings(playersData, matchesData);
         setStandings(newTable);
+      } catch (err) {
+        console.error('Error al cargar data:', err);
       }
-    }
-  };
+    };
+    loadData().catch(console.error);
+  }, []);
 
-  // Cada vez que 'players' o 'matches' cambien en este componente, recalculamos
+  // Recalcular cada vez que cambie players o matches
   useEffect(() => {
-    if (players.length && matches.length) {
-      const newTable = calculateStandings(players, matches);
-      setStandings(newTable);
+    if (players.length > 0 && matches.length > 0) {
+      setStandings(calculateStandings(players, matches));
     }
   }, [players, matches]);
 
-  // Lógica de puntos
   const calculateStandings = (playersArr, matchesArr) => {
     const tableMap = {};
+    // Inicializar cada jugador
     playersArr.forEach((p) => {
       tableMap[p.name] = {
         name: p.name,
@@ -67,31 +61,35 @@ export default function StandingsPage() {
       };
     });
 
+    // Recorrer partidos
     matchesArr.forEach((m) => {
-      const { homePlayer, awayPlayer, homeScore, awayScore } = m;
-      if (homeScore === null || awayScore === null) return;
-      // Goles
-      tableMap[homePlayer.name].gf += homeScore;
-      tableMap[homePlayer.name].ga += awayScore;
-      tableMap[awayPlayer.name].gf += awayScore;
-      tableMap[awayPlayer.name].ga += homeScore;
-      // dg
-      tableMap[homePlayer.name].dg =
-        tableMap[homePlayer.name].gf - tableMap[homePlayer.name].ga;
-      tableMap[awayPlayer.name].dg =
-        tableMap[awayPlayer.name].gf - tableMap[awayPlayer.name].ga;
-      // Puntos
-      if (homeScore > awayScore) {
-        tableMap[homePlayer.name].points += 3;
-      } else if (awayScore > homeScore) {
-        tableMap[awayPlayer.name].points += 3;
+      if (m.homeScore === null || m.awayScore === null) return;
+
+      // Sumar goles
+      tableMap[m.homePlayer.name].gf += m.homeScore;
+      tableMap[m.homePlayer.name].ga += m.awayScore;
+      tableMap[m.awayPlayer.name].gf += m.awayScore;
+      tableMap[m.awayPlayer.name].ga += m.homeScore;
+
+      // Actualizar DG
+      tableMap[m.homePlayer.name].dg =
+        tableMap[m.homePlayer.name].gf - tableMap[m.homePlayer.name].ga;
+      tableMap[m.awayPlayer.name].dg =
+        tableMap[m.awayPlayer.name].gf - tableMap[m.awayPlayer.name].ga;
+
+      // Calcular Puntos
+      if (m.homeScore > m.awayScore) {
+        tableMap[m.homePlayer.name].points += 3;
+      } else if (m.awayScore > m.homeScore) {
+        tableMap[m.awayPlayer.name].points += 3;
       } else {
-        tableMap[homePlayer.name].points += 1;
-        tableMap[awayPlayer.name].points += 1;
+        // Empate
+        tableMap[m.homePlayer.name].points += 1;
+        tableMap[m.awayPlayer.name].points += 1;
       }
     });
 
-    // Ordenar
+    // Convertir en array y ordenar
     return Object.values(tableMap).sort((a, b) => {
       if (b.points === a.points) {
         return b.dg - a.dg;
@@ -102,7 +100,7 @@ export default function StandingsPage() {
 
   return (
     <div className={styles.container}>
-      <h1 className={styles.title}>Tabla de Posiciones (Tiempo Real)</h1>
+      <h1 className={styles.title}>Tabla de Posiciones (con Firebase)</h1>
       {standings.length === 0 ? (
         <p>No hay datos suficientes o no se han ingresado resultados.</p>
       ) : (
