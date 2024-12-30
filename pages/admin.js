@@ -1,6 +1,7 @@
 // pages/admin.js
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/router';
 import styles from '../styles/Admin.module.scss';
 
 // Importar Firestore
@@ -19,6 +20,9 @@ export default function AdminPage() {
   const [imageFile, setImageFile] = useState(null); // Base64 del archivo subido
   const [players, setPlayers] = useState([]);
   const [champMode, setChampMode] = useState('single'); // 'single' o 'double'
+
+  // Para redirigir a /matches luego de generar
+  const router = useRouter();
 
   // Referencias de colecciones Firestore
   const playersColRef = collection(db, 'players');
@@ -97,7 +101,6 @@ export default function AdminPage() {
 
   // Eliminar jugador de Firestore
   const handleRemovePlayer = async (playerIndex) => {
-    // Obtenemos el ID del player en el array local
     const playerId = players[playerIndex].id;
     try {
       await deleteDoc(doc(db, 'players', playerId));
@@ -172,18 +175,27 @@ export default function AdminPage() {
       generatedMatches = generateSingleRoundRobin(players);
     }
 
-    // Guardar cada partido en "matches" (podrías usar batch si prefieres)
     try {
-      // Primero borrar los previos (opcional, si quieres limpiar)
-      // const oldSnapshot = await getDocs(matchesColRef);
-      // oldSnapshot.forEach(async (m) => {
-      //   await deleteDoc(doc(db, 'matches', m.id));
-      // });
+      // 1) Borrar partidos viejos (reset)
+      const oldSnapshot = await getDocs(matchesColRef);
+      for (const m of oldSnapshot.docs) {
+        await deleteDoc(doc(db, 'matches', m.id));
+      }
 
+      // 2) Agregar los nuevos partidos
       for (const match of generatedMatches) {
         await addDoc(matchesColRef, match);
       }
-      alert(`Partidos generados en modo: ${champMode === 'double' ? 'Ida y Vuelta' : 'Normal'}`);
+
+      alert(
+        `Partidos generados en modo: ${
+          champMode === 'double' ? 'Ida y Vuelta' : 'Normal'
+        }`
+      );
+
+      // 3) Redirigir a la página /matches
+      router.push('/matches');
+
     } catch (err) {
       console.error('Error generando partidos:', err);
     }
